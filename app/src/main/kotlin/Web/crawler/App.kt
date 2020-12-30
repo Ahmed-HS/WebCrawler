@@ -35,6 +35,8 @@ class BasicWebCrawler {
             //1. Fetch the HTML page
             val document = Jsoup.connect(URL).get()
 
+            //val document = Jsoup.parse(File("test.html"),null)
+
             //2. Parse the HTML to extract the links
             val linksOnPage = document.select("a[href]")
 
@@ -86,8 +88,9 @@ fun main(args: Array<String>) {
 
     val wrrryyy = "https://tender-shannon-bc1412.netlify.app/"
     val cnn = "http://www.cnn.com"
+    val google = "http://www.google.com"
     val crawler = BasicWebCrawler()
-    crawler.crawl(cnn)
+    crawler.crawl(cnn,40)
     val result = crawler.invertedIndex
 
     for ((word,list) in result)
