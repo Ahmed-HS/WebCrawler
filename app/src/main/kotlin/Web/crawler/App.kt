@@ -6,96 +6,135 @@ package Web.crawler
 import ca.rmen.porterstemmer.PorterStemmer
 import org.jsoup.Jsoup
 import java.io.File
+import java.lang.Exception
 
 import java.util.*
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Matcher
 import java.util.regex.Pattern
 import kotlin.collections.HashSet
 
-class BasicWebCrawler {
+class BasicWebCrawler(val maxCycles:Int) {
 
-    private val visitedLinks: HashSet<String> = HashSet()
-    private val toVisit:Queue<String> = LinkedList()
+    private val visitedLinks: MutableSet<String> = mutableSetOf()
+
+    //private val toVisit:Queue<String> = LinkedList()
     private val stemmer: PorterStemmer = PorterStemmer()
-    val invertedIndex: MutableMap<String,MutableSet<Pair<String,Int>>> = mutableMapOf()
-    val stopWords:Set<String> = File("StopWords.txt").readLines().toSet()
+    val invertedIndex: MutableMap<String, MutableSet<Pair<String, Int>>> = sortedMapOf()
+    private val stopWords: Set<String> = File("StopWords.txt").readLines().toSet()
+    val executor = Executors.newFixedThreadPool(5)
+    @Volatile
+    private var currentCycle:Int = 0
 
+    val countDownLatch = CountDownLatch(maxCycles)
 
-    fun crawl(URL: String, cyclesNumber: Int = 10) {
-
-        toVisit.add(URL)
-        var cycle = 0
-        while (toVisit.isNotEmpty() && cycle < cyclesNumber)
+    fun addToIndex(word: String, position: Int, link: String) {
+        synchronized(invertedIndex)
         {
-            cycle++
-
-            val link = toVisit.poll()
-            visitedLinks.add(link)
-            println(link)
-            //1. Fetch the HTML page
-            val document = Jsoup.connect(URL).get()
-
-            //val document = Jsoup.parse(File("test.html"),null)
-
-            //2. Parse the HTML to extract the links
-            val linksOnPage = document.select("a[href]")
-
-            //3. Get all the text on the page
-            val bodyText = document.select("body").text()
-
-            //println(bodyText)
-
-            val tokenizer: Pattern = Pattern.compile("[a-zA-Z]+")
-
-            val matcher: Matcher = tokenizer.matcher(bodyText)
-
-            var position: Int = 0
-
-            while (matcher.find())
-            {
-                val word = matcher.group().toLowerCase()
-                //println(word)
-                val stem = stemmer.stemWord(word)
-                //println(stem)
-
-                if(!stopWords.contains(stem))
-                {
-                    invertedIndex[stem] = invertedIndex.getOrDefault(stem, mutableSetOf())
-                            .apply {
-                                add( link to position)
-                            }
-                }
-
-                position++
-            }
-
-            //4. For each extracted URL add it to the toVisit list
-            for (newLink in linksOnPage)
-            {
-                val linkUrl = newLink.attr("abs:href")
-                if(!visitedLinks.contains(linkUrl))
-                {
-                    toVisit.add(linkUrl)
-                }
-            }
-
+            invertedIndex[word] = invertedIndex.getOrDefault(word, mutableSetOf())
+                    .apply {
+                        add(link to position)
+                    }
         }
     }
 
+    fun start(link: String)
+    {
+        visitedLinks.add(link)
+        executor.execute { crawl(link) }
+        countDownLatch.await()
+        executor.shutdown()
+        println("Done")
+    }
+
+    private fun crawl(link: String) {
+
+
+        //1. Fetch the HTML page
+        val document = try {
+            Jsoup.connect(link).get()
+        }
+        catch (e: Exception)
+        {
+            countDownLatch.countDown()
+            return
+        }
+
+        //2. Parse the HTML to extract the links
+        val linksOnPage = document.select("a[href]")
+
+        //3. Get all the text on the page
+        val bodyText = document.select("body").text()
+
+        val tokenizer: Pattern = Pattern.compile("[a-zA-Z]+")
+
+        val matcher: Matcher = tokenizer.matcher(bodyText)
+
+        var position: Int = 0
+
+        while (matcher.find()) {
+            val word = matcher.group().toLowerCase()
+            //println(word)
+            val stem = stemmer.stemWord(word)
+            //println(stem)
+
+            if (!stopWords.contains(stem)) {
+                addToIndex(stem, position, link)
+            }
+
+            position++
+        }
+        //println("Processed link: $link")
+        //4. For each extracted URL add it to the toVisit list
+        for (newLink in linksOnPage) {
+            val linkUrl = newLink.attr("abs:href")
+
+            synchronized(visitedLinks)
+            {
+                if (visitedLinks.add(linkUrl))
+                {
+                    synchronized(currentCycle)
+                    {
+                        if(currentCycle < maxCycles)
+                        {
+                            currentCycle++
+                            //println("Enqueued link: $linkUrl")
+                            executor.execute {crawl(linkUrl)}
+                        }
+                    }
+                }
+            }
+        }
+
+        countDownLatch.countDown()
+
+    }
 }
 
-fun main(args: Array<String>) {
 
+
+fun main(args: Array<String>) {
     val wrrryyy = "https://tender-shannon-bc1412.netlify.app/"
     val cnn = "http://www.cnn.com"
     val google = "http://www.google.com"
-    val crawler = BasicWebCrawler()
-    crawler.crawl(cnn,40)
+    val crawler = BasicWebCrawler(30)
+    crawler.start(cnn)
     val result = crawler.invertedIndex
+    val outputFile = File("out.txt").bufferedWriter()
+    for ((word, list) in result) {
+        outputFile.appendln("$word, frequency: ${list.size}")
 
-    for ((word,list) in result)
-    {
-        println(word)
-        println(list)
+        for (item in list)
+        {
+            outputFile.appendln(item.toString())
+        }
+
+        outputFile.append("------------------------------\n")
+        //println("$word - frequency: ${list.size}")
+        //println(list)
     }
+
 }
