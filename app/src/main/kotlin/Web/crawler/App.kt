@@ -6,18 +6,15 @@ package Web.crawler
 import ca.rmen.porterstemmer.PorterStemmer
 import org.jsoup.Jsoup
 import java.io.File
-import java.lang.Exception
-
 import java.util.*
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.Lock
 import java.util.regex.Matcher
 import java.util.regex.Pattern
-import kotlin.collections.HashSet
 
-class BasicWebCrawler(val maxCycles:Int) {
+class BasicWebCrawler(val maxCycles: Int) {
 
     private val visitedLinks: MutableSet<String> = mutableSetOf()
 
@@ -29,7 +26,7 @@ class BasicWebCrawler(val maxCycles:Int) {
     @Volatile
     private var currentCycle:Int = 0
 
-    val countDownLatch = CountDownLatch(maxCycles)
+    private val runningJobs = AtomicInteger(1)
 
     fun addToIndex(word: String, position: Int, link: String) {
         synchronized(invertedIndex)
@@ -45,7 +42,11 @@ class BasicWebCrawler(val maxCycles:Int) {
     {
         visitedLinks.add(link)
         executor.execute { crawl(link) }
-        countDownLatch.await()
+        //countDownLatch.await()
+        //executor.awaitTermination(1,TimeUnit.HOURS)
+        while (runningJobs.get() > 0) {
+
+        }
         executor.shutdown()
         println("Done")
     }
@@ -59,7 +60,7 @@ class BasicWebCrawler(val maxCycles:Int) {
         }
         catch (e: Exception)
         {
-            countDownLatch.countDown()
+            runningJobs.decrementAndGet()
             return
         }
 
@@ -101,6 +102,7 @@ class BasicWebCrawler(val maxCycles:Int) {
                         if(currentCycle < maxCycles)
                         {
                             currentCycle++
+                            runningJobs.incrementAndGet()
                             //println("Enqueued link: $linkUrl")
                             executor.execute {crawl(linkUrl)}
                         }
@@ -109,7 +111,7 @@ class BasicWebCrawler(val maxCycles:Int) {
             }
         }
 
-        countDownLatch.countDown()
+        runningJobs.decrementAndGet()
 
     }
 }
@@ -120,19 +122,23 @@ fun main(args: Array<String>) {
     val wrrryyy = "https://tender-shannon-bc1412.netlify.app/"
     val cnn = "http://www.cnn.com"
     val google = "http://www.google.com"
-    val crawler = BasicWebCrawler(30)
+    val crawler = BasicWebCrawler(300)
     crawler.start(cnn)
+
     val result = crawler.invertedIndex
-    val outputFile = File("out.txt").bufferedWriter()
+
+    val outputFile = File("out.txt")
+    outputFile.writeText("")
+
     for ((word, list) in result) {
-        outputFile.appendln("$word, frequency: ${list.size}")
+        outputFile.appendText("$word, frequency: ${list.size} \n")
 
         for (item in list)
         {
-            outputFile.appendln(item.toString())
+            outputFile.appendText("$item \n")
         }
 
-        outputFile.append("------------------------------\n")
+        outputFile.appendText("------------------------------\n")
         //println("$word - frequency: ${list.size}")
         //println(list)
     }
