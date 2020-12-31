@@ -6,13 +6,43 @@ package Web.crawler
 import ca.rmen.porterstemmer.PorterStemmer
 import org.jsoup.Jsoup
 import java.io.File
-import java.util.*
 import java.util.concurrent.Executors
-import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.locks.Lock
 import java.util.regex.Matcher
 import java.util.regex.Pattern
+
+class MyLock
+{
+    private val lock = Object()
+    private val count = AtomicInteger(0)
+    fun waitForTasks()
+    {
+        synchronized(lock)
+        {
+            lock.wait()
+        }
+    }
+    fun beginTask()
+    {
+        count.incrementAndGet()
+    }
+
+    fun finishTask()
+    {
+        synchronized(count)
+        {
+            count.decrementAndGet()
+            if(count.get() < 0)
+            {
+                synchronized(lock)
+                {
+                    lock.notify()
+                }
+            }
+        }
+    }
+}
+
 
 class BasicWebCrawler(val maxCycles: Int) {
 
@@ -22,11 +52,11 @@ class BasicWebCrawler(val maxCycles: Int) {
     private val stemmer: PorterStemmer = PorterStemmer()
     val invertedIndex: MutableMap<String, MutableSet<Pair<String, Int>>> = sortedMapOf()
     private val stopWords: Set<String> = File("StopWords.txt").readLines().toSet()
-    val executor = Executors.newFixedThreadPool(5)
+    private val executor = Executors.newFixedThreadPool(8)
     @Volatile
     private var currentCycle:Int = 0
 
-    private val runningJobs = AtomicInteger(1)
+    private val myLock = MyLock()
 
     fun addToIndex(word: String, position: Int, link: String) {
         synchronized(invertedIndex)
@@ -42,11 +72,7 @@ class BasicWebCrawler(val maxCycles: Int) {
     {
         visitedLinks.add(link)
         executor.execute { crawl(link) }
-        //countDownLatch.await()
-        //executor.awaitTermination(1,TimeUnit.HOURS)
-        while (runningJobs.get() > 0) {
-
-        }
+        myLock.waitForTasks()
         executor.shutdown()
         println("Done")
     }
@@ -60,7 +86,7 @@ class BasicWebCrawler(val maxCycles: Int) {
         }
         catch (e: Exception)
         {
-            runningJobs.decrementAndGet()
+            myLock.finishTask()
             return
         }
 
@@ -88,7 +114,7 @@ class BasicWebCrawler(val maxCycles: Int) {
 
             position++
         }
-        //println("Processed link: $link")
+        println("Processed link: $link")
         //4. For each extracted URL add it to the toVisit list
         for (newLink in linksOnPage) {
             val linkUrl = newLink.attr("abs:href")
@@ -102,7 +128,7 @@ class BasicWebCrawler(val maxCycles: Int) {
                         if(currentCycle < maxCycles)
                         {
                             currentCycle++
-                            runningJobs.incrementAndGet()
+                            myLock.beginTask()
                             //println("Enqueued link: $linkUrl")
                             executor.execute {crawl(linkUrl)}
                         }
@@ -111,7 +137,7 @@ class BasicWebCrawler(val maxCycles: Int) {
             }
         }
 
-        runningJobs.decrementAndGet()
+        myLock.finishTask()
 
     }
 }
@@ -122,7 +148,7 @@ fun main(args: Array<String>) {
     val wrrryyy = "https://tender-shannon-bc1412.netlify.app/"
     val cnn = "http://www.cnn.com"
     val google = "http://www.google.com"
-    val crawler = BasicWebCrawler(300)
+    val crawler = BasicWebCrawler(30)
     crawler.start(cnn)
 
     val result = crawler.invertedIndex
